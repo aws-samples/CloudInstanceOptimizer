@@ -1,0 +1,77 @@
+FROM ubuntu:22.04
+
+# We are first installing singularity containers inside the docker
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Ensure repositories are up-to-date
+RUN apt-get update
+# Install debian packages for dependencies
+RUN apt-get install -y \
+   autoconf \
+   automake \
+   cryptsetup \
+   git \
+   libfuse-dev \
+   libglib2.0-dev \
+   libseccomp-dev \
+   libtool \
+   pkg-config \
+   runc \
+   squashfs-tools \
+   squashfs-tools-ng \
+   uidmap \
+   wget \
+   zlib1g-dev \
+   build-essential \
+   software-properties-common
+
+RUN export VERSION=1.21.0 OS=linux ARCH=amd64 && \
+  wget https://dl.google.com/go/go$VERSION.$OS-$ARCH.tar.gz && \
+  tar -C /usr/local -xzvf go$VERSION.$OS-$ARCH.tar.gz && \
+  rm go$VERSION.$OS-$ARCH.tar.gz
+
+RUN echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
+ENV PATH=/usr/local/go/bin:$PATH
+
+ENV VERSION='4.1.0'
+RUN  wget https://github.com/sylabs/singularity/releases/download/v${VERSION}/singularity-ce-${VERSION}.tar.gz
+RUN  tar -xzf singularity-ce-${VERSION}.tar.gz
+WORKDIR "singularity-ce-${VERSION}"
+
+RUN ./mconfig
+RUN make -C builddir
+RUN make -C builddir install
+
+WORKDIR /
+
+# Setup the python environment
+RUN add-apt-repository ppa:deadsnakes/ppa
+RUN apt-get install python3.11 python3.11-distutils python3.11-dev -y
+RUN apt-get install curl -y
+RUN curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+RUN python3.11 get-pip.py
+
+RUN ln -s /usr/bin/python3.11 /usr/bin/python
+RUN echo "alias ls='ls -al'" >> /root/.bashrc
+
+# Now copy the ec2benchmarking code
+COPY requirements.txt requirements.txt
+RUN python3.11 -m pip install -r requirements.txt
+
+COPY ./examples/fem_calculation/moose.sif moose.sif  #Moose singularity image
+COPY ./src/utils.py utils.py
+COPY ./src/monitor_system.py monitor_system.py
+
+COPY ./examples/fem_calculation/runmoose.sh runmoose.sh
+COPY ./examples/fem_calculation/PrismsWithNamedSurfaces.inp PrismsWithNamedSurfaces.inp
+COPY ./examples/fem_calculation/stressed.i stressed.i
+COPY ./examples/fem_calculation_optimization/runscript.sh runscript.sh
+
+RUN chmod 777 runmoose.sh
+RUN chmod 777 runscript.sh
+
+WORKDIR /
+
+
+
+

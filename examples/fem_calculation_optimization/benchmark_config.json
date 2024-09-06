@@ -1,0 +1,19 @@
+{
+	"region_name" : "us-east-1",
+	"s3_bucket_name" : "dummy-bucket",
+	"container_arn" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container",
+	"logGroupName" : "/aws/batch/job",
+	"replications" : 1,
+	"review_logs_past_hrs": 1,
+	"job_timeout": 20,
+	"run_cmd": "/env_benchmark/bin/python /monitor_system.py --cmd ./runmoose.sh ARGS",
+	"docker_privileged": "True",
+	"ec2_types":["c6"],
+	"optimization_iterations": 20,
+	"optimization_parallel_samples": 5,
+	"optimization_metric": "runtime",
+	"optimization_arg1": [1,64],
+	"optimization_arg1_type": "integer"
+}
+
+

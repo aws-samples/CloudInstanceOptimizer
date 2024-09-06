@@ -1,0 +1,14 @@
+{
+	"region_name" : "us-east-1",
+	"s3_bucket_name" : "dummy-bucket",
+	"container_arn" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container",
+	"logGroupName" : "/aws/batch/job",
+	"replications" : 5,
+	"review_logs_past_hrs": 1,
+	"docker_privileged": "True",
+	"job_timeout": 15,
+	"run_cmd": "python monitor_system.py --cmd ./runmoose.sh",
+	"ec2_types":["t2", "t3", "t4", "m4", "m5", "m6", "m7", "c4", "c5", "c6", "c7"]
+}
+
+

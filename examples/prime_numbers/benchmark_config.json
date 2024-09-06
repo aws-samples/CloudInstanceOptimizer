@@ -1,0 +1,14 @@
+{
+	"region_name" : "us-east-1",
+	"s3_bucket_name" : "dummy-bucket",
+	"container_arn" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container",
+	"container_arn_arm" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container-arm", 
+	"logGroupName" : "/aws/batch/job",
+	"replications" : 3,
+	"review_logs_past_hrs": 1,
+	"job_timeout": 10,
+	"run_cmd": "python monitor_system.py --cmd python stress_test.py",
+	"ec2_types":[ "t2", "t3", "m4", "m5", "m6", "c4", "c5", "c6", "c7"]
+}
+
+

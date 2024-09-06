@@ -1,0 +1,11 @@
+aws_cdk_lib
+awswrangler
+boto3
+matplotlib
+pandas
+psutil
+requests
+tqdm
+streamlit
+scikit-optimize
+plotly
