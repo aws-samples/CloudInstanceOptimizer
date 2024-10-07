@@ -1,7 +1,7 @@
 {
 	"region_name" : "us-east-1",
 	"s3_bucket_name" : "dummy-bucket",
-	"container_arn" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container-arm",
+	"container_arn" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container",
 	"logGroupName" : "/aws/batch/job",
 	"replications" : 1,
 	"review_logs_past_hrs": 1,
