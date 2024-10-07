@@ -42,18 +42,6 @@ def load_valid_instance_list():
     return valid_list
 
 def get_job_resources(region, metadata):
-    queue_name = [
-        value
-        for key, value in metadata.items()
-        if "JobQueue" in key and "graviton" not in key
-    ][0].split("/")[-1]
-    queue_name_graviton = [
-        value
-        for key, value in metadata.items()
-        if "JobQueue" in key and "graviton" in key
-    ]
-    if len(queue_name_graviton) > 0:
-        queue_name_graviton = queue_name_graviton[0].split("/")[-1]
     job_definition_name = metadata["JDec2benchmark"].split("/")[-1].split(":")[0]
     if "JDec2benchmarkgraviton" in metadata.keys():
         job_definition_name_graviton = (
@@ -61,7 +49,7 @@ def get_job_resources(region, metadata):
         )
     else:
         job_definition_name_graviton = None
-    return queue_name, queue_name_graviton, job_definition_name, job_definition_name_graviton
+    return job_definition_name, job_definition_name_graviton
 
 
 def get_ec2_types(json_config, valid_list):
@@ -306,28 +294,29 @@ def run_optimization(json_config):
     job_command[index:index] = ["-s3", s3_bucket_name]
 
     metadata = get_cloudformation_metadata("CdkBenchEnvStack", region=region)
-    (
-        queue_name,
-        queue_name_graviton,
-        job_definition_name,
-        job_definition_name_graviton,
-    ) = get_job_resources(region, metadata)
+    job_definition_name, job_definition_name_graviton = get_job_resources(region, metadata)
 
     batch_client = boto3.client("batch", region_name=region)
 
-    graviton_types, non_graviton_types = get_ec2_types(json_config, valid_list)
+    if len(json_config["ec2_types"]) == 1 and "." in json_config["ec2_types"][0]:
+        non_graviton_types = json_config["ec2_types"]
+    else:
+        graviton_types, non_graviton_types = get_ec2_types(json_config, valid_list)
 
-    #Find the largest
-    specs = [get_instance_specs(instance_type) for instance_type in non_graviton_types]
-    def extract_cpu_count(row):
-        cpu_count_str = row['CPU'].split()[0]
-        return int(cpu_count_str)
-    max_cpu_index = max(range(len(specs)), key=lambda i: extract_cpu_count(specs[i]))
-    non_graviton_types = [non_graviton_types[max_cpu_index]]
+        #Find the largest
+        specs = [get_instance_specs(instance_type) for instance_type in non_graviton_types]
+        def extract_cpu_count(row):
+            cpu_count_str = row['CPU'].split()[0]
+            return int(cpu_count_str)
+        max_cpu_index = max(range(len(specs)), key=lambda i: extract_cpu_count(specs[i]))
+        non_graviton_types = [non_graviton_types[max_cpu_index]]
 
     total_iterations = json_config["optimization_iterations"]
     optimization_parallel_samples = json_config["optimization_parallel_samples"]
     optimization_metric = json_config["optimization_metric"]
+
+    instance_queue_map = get_queue_instance_type_map(batch_client, metadata, non_graviton_types)
+    queue_name = list(instance_queue_map.keys())[0]
 
     optimization_dimensions = []
     dim_types = [
@@ -381,49 +370,121 @@ def run_optimization(json_config):
     print(min(optimizer.yi))  # print the best objective found
 
 
+def get_queue_instance_type_map(batch_client, metadata, instance_types):
+    """
+    Create a mapping of job queues to the supported instance types from the provided list.
+
+    This function filters compute environments based on the provided metadata,
+    checks for instance type compatibility, and maps job queues to their supported instance types.
+
+    Args:
+    batch_client (boto3.client): Boto3 AWS Batch client
+    metadata (dict): A dictionary containing metadata about the deployment
+    instance_types (list): List of EC2 instance types to check for compatibility
+
+    Returns:
+    dict: A dictionary with job queue names as keys and lists of supported EC2 instance types as values.
+           Only queues with supported instance types are included in the result.
+    """
+    queue_instance_map = {}
+
+    # Get all compute environments
+    compute_environments = batch_client.describe_compute_environments()['computeEnvironments']
+    keys = [x.split('/')[-1] for x in metadata.values()]
+
+    #Ensure only looking at ce deployed for this code
+    lst = []
+    for ce in compute_environments:
+        ce_name = ce['computeEnvironmentName']
+        if ce_name in keys:
+            lst.append(ce)
+    compute_environments = lst
+
+    # Create a mapping of compute environment names to their instance types
+    ce_instance_map = {}
+    for ce in compute_environments:
+        ce_name = ce['computeEnvironmentName']
+        ce_instance_types = set(ce['computeResources'].get('instanceTypes', []))
+
+        shared_instances = []
+        for instance in instance_types:
+            instance_prefix = instance.split('.')[0]  # Get the prefix before the dot
+            for ce_instance in ce_instance_types:
+                #if instance_prefix in ce_instance or ce_instance in instance_prefix:
+                if instance_prefix == ce_instance:
+                    shared_instances.append(instance)
+                    break  # Move to the next instance once a match is found
+
+        ce_instance_map[ce_name] = shared_instances #ce_instance_types.intersection(instance_types)
+
+    # Get all job queues
+    job_queues = batch_client.describe_job_queues()['jobQueues']
+
+    # For each job queue, find its compute environments and associated instance types
+    for queue in job_queues:
+        queue_name = queue['jobQueueName']
+        queue_instance_types = set()
+        for env in queue['computeEnvironmentOrder']:
+            ce_name = env['computeEnvironment']
+            ce_name =ce_name.split('/')[-1]
+            if ce_name in ce_instance_map.keys():
+                queue_instance_types.update(ce_instance_map[ce_name])
+
+        if queue_instance_types:
+            queue_instance_map[queue_name] = list(queue_instance_types)
+
+    return queue_instance_map
+
+
 def run_benchmark(json_config):
     valid_list = load_valid_instance_list()
     region = json_config["region_name"]
     replicates = json_config["replications"]
     s3_bucket_name = json_config["s3_bucket_name"]
     job_command = json_config["run_cmd"].split()
-    #job_command.extend(["-s3", s3_bucket_name])
     index = job_command.index('--cmd')
     job_command[index:index] = ["-s3", s3_bucket_name]
+    exclude_lst = json_config.get("exclude_ec2_types", [])
 
     metadata = get_cloudformation_metadata("CdkBenchEnvStack", region=region)
-    (
-        queue_name,
-        queue_name_graviton,
-        job_definition_name,
-        job_definition_name_graviton,
-    ) = get_job_resources(region, metadata)
+    job_definition_name, job_definition_name_graviton = get_job_resources(region, metadata)
 
     batch_client = boto3.client("batch", region_name=region)
 
     graviton_types, non_graviton_types = get_ec2_types(json_config, valid_list)
 
-    job_ids = submit_jobs(
-        batch_client,
-        non_graviton_types,
-        queue_name,
-        job_definition_name,
-        replicates,
-        job_command,
-    )
-    if job_definition_name_graviton is not None:
-        job_ids += submit_jobs(
+    #Remove any per user request
+    graviton_types = [x for x in graviton_types if not any(exclude in x for exclude in exclude_lst)]
+    non_graviton_types = [x for x in non_graviton_types if not any(exclude in x for exclude in exclude_lst)]
+
+    grav_instance_queue_map = get_queue_instance_type_map(batch_client, metadata, graviton_types)
+    instance_queue_map = get_queue_instance_type_map(batch_client, metadata, non_graviton_types)
+
+    for queue_name in instance_queue_map.keys():
+        job_ids = submit_jobs(
             batch_client,
-            graviton_types,
-            queue_name_graviton,
-            job_definition_name_graviton,
+            instance_queue_map[queue_name],
+            queue_name,
+            job_definition_name,
             replicates,
             job_command,
         )
-
-    aws_batch_wait(queue_name, region)
     if job_definition_name_graviton is not None:
-        aws_batch_wait(queue_name_graviton, region)
+        for queue_name_graviton in grav_instance_queue_map.keys():
+            job_ids += submit_jobs(
+                batch_client,
+                grav_instance_queue_map[queue_name_graviton],
+                queue_name_graviton,
+                job_definition_name_graviton,
+                replicates,
+                job_command,
+            )
+
+    for queue_name in instance_queue_map.keys():
+        aws_batch_wait(queue_name, region)
+    if job_definition_name_graviton is not None:
+        for queue_name_graviton in grav_instance_queue_map.keys():
+            aws_batch_wait(queue_name_graviton, region)
 
     file_names = wr.s3.list_objects(f"s3://{s3_bucket_name}")
     current_time = datetime.now()
@@ -438,24 +499,60 @@ def run_benchmark(json_config):
     data = process_results(filtered_file_names, region)
     data.to_csv("ec2data.csv", index=False)
 
+def kill_all_jobs(json_config):
+    region = json_config["region_name"]
+    metadata = get_cloudformation_metadata("CdkBenchEnvStack", region=region)
 
-def main(config_path):
+    # Filter queue names from metadata
+    queues = [value for value in metadata.values() if 'job-queue' in value]
+
+    # Initialize Batch client
+    batch_client = boto3.client("batch", region_name=region)
+
+    # Job states to terminate
+    job_states = ['RUNNING', 'RUNNABLE', 'STARTING']
+
+    for queue in queues:
+        for state in job_states:
+            # List all jobs in the queue for the current state
+            response = batch_client.list_jobs(jobQueue=queue, jobStatus=state)
+            job_ids = [job['jobId'] for job in response['jobSummaryList']]
+
+            # Terminate each job
+            for job_id in job_ids:
+                try:
+                    batch_client.terminate_job(
+                        jobId=job_id,
+                        reason=f'Terminated {state} job by killjobs function'
+                    )
+                    print(f"Terminated {state} job {job_id} in queue {queue}")
+                except Exception as e:
+                    print(f"Error terminating {state} job {job_id}: {str(e)}")
+
+        print(f"Finished processing queue: {queue}")
+
+def main(config_path, killjobs):
 
     #config_path = "./examples/prime_numbers/benchmark_config.json"
     #config_path = "./examples/fem_calculation/benchmark_config.json"
     #config_path = "./examples/fem_calculation_optimization/benchmark_config.json"
     #config_path = "./examples/inferentia_tune/benchmark_config.json"
+    #config_path = "./examples/gpu_training_optimization/benchmark_config.json"
 
     json_config = get_json(config_path)
 
-    if "optimization_iterations" in json_config:
-        run_optimization(json_config)
+    if killjobs:
+        kill_all_jobs(json_config)
     else:
-        run_benchmark(json_config)
+        if "optimization_iterations" in json_config:
+            run_optimization(json_config)
+        else:
+            run_benchmark(json_config)
 
 #%% main
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-j", dest="config_path", type=str, help="json input file")
+    parser.add_argument("-k", "--killjobs", action="store_true", help="Terminate all running jobs.")
     args = parser.parse_args()
-    main(args.config_path)
+    main(args.config_path, args.killjobs)

@@ -147,8 +147,17 @@ A streamlit app to review the optimization results can be activated via:
 1. **Prime Number calculation:** [Folder](/examples/prime_numbers) EC2 optimization with a very simple application.  Users can start with this example and modify it to quickly apply the tool for their containers. This example demonstrates how to optimize both x86-64 and ARM64 architectures. 
 2. **FEM Calculation:** [Folder](/examples/fem_calculation) Similiar to the prime number calculation, but a much more intensive workload.  This includes more complicated containers and runscripts.
 3. **FEM Parallelization Optimization:** [Folder](/examples/fem_calculation_optimization) Example of how to find the best parallel configuration for the FEM workload. The runtime is the main objective function for the optimization.
+4. **GPU Training Optimization:** [Folder](/examples/gpu_training_optimization) Example of how to find the best learning rate, batch size, and epochs for a GPU ML training workload. The test set loss is the main objective function for the optimization.
 
+### Terminate Tasks
 
+If at any point you would like to terminate all submited jobs in AWS Batch, you can run the command:
+
+```
+python run_benchmark.py -k -j ./examples/fem_calculation/benchmark_config.json
+```
+
+where we have added the ```-k``` option.
 
 ## Contributing
 

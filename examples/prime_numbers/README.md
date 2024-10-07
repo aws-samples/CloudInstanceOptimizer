@@ -23,3 +23,9 @@ To run this example:
 ```
 python run_benchmark.py -j ./examples/prime_numbers/benchmark_config.json
 ```
+
+Note that some instances are either quite popular causing low availability or do not have many instances available in the wild.  Or, a user knows a priori that they do not want to review specific instance types or families. The input file will accept an EC2 exclusion filter in the json input:
+
+```
+"exclude_ec2_types":[ "m6id", "m5n", ".16xlarge", ".24xlarge", ".32xlarge" ,".48xlarge"  ]
+```

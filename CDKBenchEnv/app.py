@@ -42,6 +42,9 @@ cdk deploy -c json_file_path=../examples/fem_calculation_optimization/benchmark_
 
 cdk synth -c json_file_path=../examples/fem_calculation/benchmark_config.json
 cdk deploy -c json_file_path=../examples/fem_calculation/benchmark_config.json
+
+cdk synth -c json_file_path=../examples/gpu_training_optimization/benchmark_config.json
+cdk deploy -c json_file_path=../examples/gpu_training_optimization/benchmark_config.json
 '''
 
 json_file_path = app.node.try_get_context("json_file_path")

@@ -15,7 +15,6 @@ from utils import get_instance_region, get_ec2_instance_id, get_ec2_type
 import awswrangler as wr
 import pandas
 import sys
-import subprocess
 
 
 class ResourceMonitor(Thread):
@@ -138,27 +137,20 @@ if __name__ == '__main__':
     sys.stdout.flush()
     cmd = " ".join(args.cmd)
     print(f"Running command {cmd}")
+    sys.stdout.flush()
 
+    failed = False
     try:
-        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-
-        while True:
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None:
-                break
-            if output:
-                print(output.strip())
-
-        rc = process.poll()
+        rc = os.system(cmd)
 
         if rc == 0:
             print('Stress application completed successfully.')
         else:
             print(f'Stress application failed with exit status {rc}.')
-
-    except subprocess.CalledProcessError as e:
-        print(f"Command '{cmd}' failed with exit status {e.returncode}")
-        print(e.output)
+            failed = True
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        failed = True
 
     sys.stdout.flush()
 
@@ -167,26 +159,22 @@ if __name__ == '__main__':
     resource_monitor.join()
     print('Resource monitoring stopped.')
 
-    if args.cf is not None:
-        print("Custom metric option selected.")
-        if os.path.isfile(args.cf):
-            with open(args.cf, 'r') as f:
-                metric = f.read()
-            csv_logs = pandas.read_csv(local_file)
-            csv_logs['custom_metric'] = [metric] * csv_logs.shape[0]
-            wr.s3.to_csv( df = csv_logs, path=f's3://{s3_bucket}/{local_file}')
+    if not failed:
+        if args.cf is not None:
+            print("Custom metric option selected.")
+            if os.path.isfile(args.cf):
+                with open(args.cf, 'r') as f:
+                    metric = f.read()
+                csv_logs = pandas.read_csv(local_file)
+                csv_logs['custom_metric'] = [metric] * csv_logs.shape[0]
+                wr.s3.to_csv( df = csv_logs, path=f's3://{s3_bucket}/{local_file}')
+            else:
+                print("ERROR: Could not find the custom metric file.")
         else:
-            print("ERROR: Could not find the custom metric file.")
-    else:
-        wr.s3.upload(local_file=local_file, path=f's3://{s3_bucket}/{local_file}')
+            wr.s3.upload(local_file=local_file, path=f's3://{s3_bucket}/{local_file}')
 
     print("End")
 
     sys.stdout.flush()
 
-    #TODO: test, then delete below.  Turns out the neuron container had a blocking script that needed to be deleted
-    # Depending on what the user is running, sometimes the codes will block the container from
-    # exiting. So we are specifically forcing the container exit here.
-    exit_code = 0  # exit code 0 for success
-    #os._exit(exit_code)
-    sys.exit(0)
+

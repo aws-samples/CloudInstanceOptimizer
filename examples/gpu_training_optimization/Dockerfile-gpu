@@ -1,0 +1,25 @@
+FROM nvcr.io/nvidia/pytorch:23.05-py3
+
+RUN apt-get update
+RUN apt-get install software-properties-common -y
+
+COPY requirements.txt /
+RUN python -m pip install --no-cache-dir -r /requirements.txt
+
+WORKDIR /
+
+RUN python -m pip install --no-cache-dir torchvision
+
+# Code a user wants to run on each EC2 instance and find the best option
+COPY ./examples/gpu_training_optimization/download_data.py /
+
+# Run the download script to pre-download the data
+RUN python /download_data.py
+
+COPY ./src/utils.py /
+COPY ./src/monitor_system.py /
+
+COPY ./examples/gpu_training_optimization/train.py /
+COPY ./examples/gpu_training_optimization/runscript.sh /
+
+WORKDIR /

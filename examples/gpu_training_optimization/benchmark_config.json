@@ -1,0 +1,23 @@
+{
+	"region_name" : "us-east-1",
+	"s3_bucket_name" : "dummy-bucket",
+	"container_arn_arm" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container-arm",
+	"logGroupName" : "/aws/batch/job",
+	"replications" : 1,
+	"review_logs_past_hrs": 1,
+	"job_timeout": 20,
+	"run_cmd": "python /monitor_system.py -cf /custom_test_metric.txt --cmd /runscript.sh ARGS",
+	"ec2_types":["g5.16xlarge"],
+	"gpu_count" : 1,
+	"optimization_iterations": 20,
+	"optimization_parallel_samples": 5,
+	"optimization_metric": "custom_metric",
+	"optimization_arg1": [2,100],
+	"optimization_arg1_type": "integer",
+	"optimization_arg2": [1e-6,1e-2],
+	"optimization_arg2_type": "float",
+	"optimization_arg3": [1,64],
+	"optimization_arg3_type": "integer"
+}
+
+
