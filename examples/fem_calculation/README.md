@@ -4,11 +4,11 @@ The [MOOSE](https://mooseframework.inl.gov/index.html) FEM has moved their pre-b
 
 To do this conversion, we first must install [Singularity](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html).
 
-Then generate a singularity image:
+Then, inside the ```./examples/fem_calculation/``` directory, generate a singularity image:
 
-```singularity build ./examples/fem_calculation/moose.sif docker://idaholab/moose:latest```
+```singularity build moose.sif docker://idaholab/moose:latest```
 
-Now that we have the latest singularity MOOSE image, we can build our Docker container which installs singularity inside the docker and enables running the latest MOOSE container on AWS Batch.
+Now that we have the latest singularity MOOSE image, we can build our Docker container which installs singularity inside the docker and enables running the latest MOOSE container on AWS Batch. **OPTIONAL:** You can update the example Dockerfile to use the latest singularity versions found in the instructions [here](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html).
 
 ```docker build . -f ./examples/fem_calculation/Dockerfile-FEM -t ec2benchmark```
 

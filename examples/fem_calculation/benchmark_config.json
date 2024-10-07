@@ -8,7 +8,7 @@
 	"docker_privileged": "True",
 	"job_timeout": 15,
 	"run_cmd": "python monitor_system.py --cmd ./runmoose.sh",
-	"ec2_types":["t2", "t3", "t4", "m4", "m5", "m6", "m7", "c4", "c5", "c6", "c7"]
+	"ec2_types":[ "c4", "c5", "c6", "c7"]
 }
 
 
