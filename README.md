@@ -67,7 +67,6 @@ By leveraging this tool, users can achieve a level of optimization that goes bey
 
 Features requested and currently in development:
 
-* Create example specifically for GPU tuning
 * Add option for user provided AMI. ECS with AWS Batch requires several startup programs to be installed in the AMI.  Thus, users will need to modify their AMI to run on ECS. 
 * Add option to simultaneously optimize hyperparameters and find the best ec2 instance type.
 
