@@ -4,7 +4,7 @@
 	"container_arn" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container",
 	"logGroupName" : "/aws/batch/job",
 	"replications" : 5,
-	"review_logs_past_hrs": 1,
+	"review_logs_past_hrs": 5,
 	"job_timeout": 15,
 	"run_cmd": "python monitor_system.py --cmd ./runscript.sh",
 	"ec2_types":[ "c4", "c5", "c6", "c7"]
