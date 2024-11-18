@@ -5,9 +5,8 @@
 	"logGroupName" : "/aws/batch/job",
 	"replications" : 5,
 	"review_logs_past_hrs": 1,
-	"docker_privileged": "True",
 	"job_timeout": 15,
-	"run_cmd": "python monitor_system.py --cmd ./runmoose.sh",
+	"run_cmd": "python monitor_system.py --cmd ./runscript.sh",
 	"ec2_types":[ "c4", "c5", "c6", "c7"]
 }
 

@@ -336,6 +336,8 @@ def run_optimization(json_config):
             raise ValueError("ERROR: categorical is not setup at the moment.")
         elif dim_type.lower() == "integer":
             optimization_dimensions.append(Integer(value[0], value[1]))
+        elif dim_type.lower() == "log-uniform":
+            optimization_dimensions.append(Real(value[0], value[1], "log-uniform"))
         else:
             optimization_dimensions.append(Real(value[0], value[1]))
 

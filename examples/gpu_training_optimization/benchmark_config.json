@@ -15,7 +15,7 @@
 	"optimization_arg1": [2,100],
 	"optimization_arg1_type": "integer",
 	"optimization_arg2": [1e-6,1e-2],
-	"optimization_arg2_type": "float",
+	"optimization_arg2_type": "log-uniform",
 	"optimization_arg3": [1,64],
 	"optimization_arg3_type": "integer"
 }
