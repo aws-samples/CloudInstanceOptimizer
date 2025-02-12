@@ -1,25 +1,78 @@
 from aws_cdk import (
     Duration,
-    Stack
+    Stack,
+    CfnOutput
 )
 from constructs import Construct
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_batch as batch
 from aws_cdk import aws_iam as iam
 from benchmark_utils import get_instance_types_in_family, separate_ec2_types
+import boto3
+
+
+def get_available_azs(region_name):
+    ec2_client = boto3.client('ec2', region_name=region_name)
+    response = ec2_client.describe_availability_zones(
+        Filters=[
+            {'Name': 'opt-in-status', 'Values': ['opt-in-not-required', 'opted-in']},
+            {'Name': 'state', 'Values': ['available']}
+        ]
+    )
+    return [az['ZoneName'] for az in response['AvailabilityZones']]
+
 
 class CdkBenchEnvStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, json_config: dict, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        self.json_config = json_config
+
         # Forced to create a new VPC, mnp in batch seems to not work correctly in default vpc
-        self.vpc = ec2.Vpc(self, "VPC", max_azs=6)
+        #self.vpc = ec2.Vpc(self, "VPC", max_azs=6)
+        # Get all available AZs using boto3
+        available_azs = get_available_azs(json_config["region_name"])
+        self.vpc = ec2.Vpc(
+            self,
+            "benchmarkVPC",
+            subnet_configuration=[
+                ec2.SubnetConfiguration(
+                    subnet_type=ec2.SubnetType.PUBLIC,
+                    name="Public",
+                    cidr_mask=22
+                ),
+                ec2.SubnetConfiguration(
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                    name="Private",
+                    cidr_mask=22
+                )
+            ],
+            availability_zones=available_azs  # Explicitly specify the AZs to get all available
+        )
+
 
         if "batch_backend" in json_config.keys():
             batch_backend = json_config["batch_backend"].lower()
         else:
             batch_backend = 'ecs'
+
+
+        # Create a security group for multinode communication
+        self.multinode_sg = ec2.SecurityGroup(
+            self,
+            "MultinodeSecurityGroup",
+            vpc=self.vpc,
+            description="Security group for multinode Batch jobs",
+            allow_all_outbound=True
+        )
+
+        # Allow all traffic between instances in this security group
+        self.multinode_sg.add_ingress_rule(
+            peer=self.multinode_sg,
+            connection=ec2.Port.all_traffic(),
+            description="Allow all traffic between nodes"
+        )
 
         batch_iam = self.create_batch_instance_role(json_config['s3_bucket_name'], backend=batch_backend)
 
@@ -49,6 +102,7 @@ class CdkBenchEnvStack(Stack):
             valid_list = f.read()
         valid_list = valid_list.replace('\n','').replace(' ','').split(',')
 
+
         ec2types = []
         for family_types in json_config['ec2_types']:
             ec2types.extend(get_instance_types_in_family(family_types))
@@ -61,19 +115,36 @@ class CdkBenchEnvStack(Stack):
 
         graviton_types_in_region, non_graviton_types_in_region = separate_ec2_types(ec2types)
 
+        exclude_lst = json_config.get("exclude_ec2_types", [])
+        graviton_types_in_region = [x for x in graviton_types_in_region
+                                    if not any(exclude in x for exclude in exclude_lst)]
+        non_graviton_types_in_region = [x for x in non_graviton_types_in_region
+                                        if not any(exclude in x for exclude in exclude_lst)]
+
+
         instance_classes = []
         graviton_instance_classes = []
+        selected_instance_types = []
         for ec2type in available_ec2_types:
             if any(x in ec2type.lower() for x in requested_type):
                 ec2type_lower = ec2type.lower()
 
                 if ec2type_lower in (x.split('.')[0] for x in non_graviton_types_in_region):
                     print(ec2type_lower)
+                    selected_instance_types.append(ec2type_lower)
                     instance_classes.append(getattr(ec2.InstanceClass, ec2type))
 
                 if "G" in ec2type and ec2type_lower in (x.split('.')[0] for x in graviton_types_in_region):
                     print(ec2type_lower)
+                    selected_instance_types.append(ec2type_lower)
                     graviton_instance_classes.append(getattr(ec2.InstanceClass, ec2type))
+
+        # Output the selected instance types
+        CfnOutput(self, "SelectedInstanceTypes",
+            value=", ".join(selected_instance_types),
+            description="EC2 instance types selected for the compute environment"
+        )
+
 
         if batch_backend == 'eks':
             raise ValueError("ERROR: EKS with Batch does not support multinode yet")
@@ -85,7 +156,9 @@ class CdkBenchEnvStack(Stack):
         else:
             ami_image = None
 
-        MAX_TYPES_PER_ENV = 8
+        #TODO: consider making this use input
+        #MAX_TYPES_PER_ENV = 8
+        MAX_TYPES_PER_ENV = 3
 
         def create_compute_env_and_queue(self, instance_classes, env_name, queue_name, batch_iam, template, ami_image=None):
             compute_env = batch.ManagedEc2EcsComputeEnvironment(
@@ -93,8 +166,8 @@ class CdkBenchEnvStack(Stack):
                 env_name,
                 vpc=self.vpc,
                 instance_role=batch_iam,
-                minv_cpus=0,
-                maxv_cpus=100000,
+                minv_cpus=self.json_config.get("batch_min_cpu",0),
+                maxv_cpus=self.json_config.get("batch_max_cpu",100000),
                 use_optimal_instance_classes=False,
                 instance_classes=instance_classes,
                 launch_template=ec2.LaunchTemplate.from_launch_template_attributes(
@@ -103,7 +176,8 @@ class CdkBenchEnvStack(Stack):
                     launch_template_id=template.attr_launch_template_id,
                     version_number="$Latest"
                 ),
-                images=ami_image
+                images=ami_image,
+                security_groups=[self.multinode_sg]
             )
 
             job_queue = batch.JobQueue(
@@ -198,7 +272,7 @@ class CdkBenchEnvStack(Stack):
             container_properties_dict['image'] = containerARM
             container_propertiesARM = batch.CfnJobDefinition.ContainerPropertiesProperty(**container_properties_dict)
 
-        nnodes = 1
+        nnodes = json_config.get("ec2_multinode_count",1)
         job_definition = batch.CfnJobDefinition(self, "JDec2benchmark",
             type="multinode",
             container_properties=container_properties,
@@ -255,8 +329,11 @@ class CdkBenchEnvStack(Stack):
         s3_access_policy = iam.ManagedPolicy(self, "CustomS3AccessPolicy",
             statements=[
                 iam.PolicyStatement(
-                    actions=["s3:GetObject", "s3:PutObject"],
-                    resources=[f"arn:aws:s3:::{s3_bucket_name}/*"]
+                    actions=["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+                    resources=[
+                        f"arn:aws:s3:::{s3_bucket_name}",
+                        f"arn:aws:s3:::{s3_bucket_name}/*"
+                    ]
                 )
             ]
         )
@@ -268,4 +345,5 @@ class CdkBenchEnvStack(Stack):
             actions=["cloudformation:ListStackResources"],
             resources=["*"],
         ))
+
         return batch_instance_role

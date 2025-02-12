@@ -9,3 +9,5 @@ tqdm
 streamlit
 scikit-optimize
 plotly
+pygad
+tenacity
