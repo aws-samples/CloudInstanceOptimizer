@@ -14,26 +14,45 @@ import pickle
 # Set the layout configuration
 st.set_page_config(layout="wide")
 
+if st.button('Reload Data'):
+    st.experimental_rerun()
+
 with open("optimizer_state.pkl", 'rb') as f:
     opt = pickle.load(f)
 
-argmin = np.argmin(opt.yi)
-Xi = np.array(opt.Xi)
+if isinstance(opt, dict):
+
+    Xi = np.array(opt['Xi'])
+    Xi = Xi.reshape(Xi.shape[0]*Xi.shape[1], Xi.shape[-1])
+    arr = np.array(opt['yi'])
+    arr = arr.reshape(arr.shape[0]*arr.shape[1])
+    argmin = np.argmin(arr)
+else:
+    argmin = np.argmin(opt.yi)
+    Xi = np.array(opt.Xi)
+    arr = np.array(opt.yi)
 ncols = Xi.shape[1]
 nsamples = Xi.shape[0]
 
 data = Xi.copy()
-arr = np.array(opt.yi)
 data = np.hstack((data,arr.reshape((-1,1))  ))
 
 colvars = ['var_' + str(i) for i in range(ncols)]
 colvars.extend(["Optimization Metric", "Sequential Sample"])
+
 
 data = np.hstack((data,np.arange(1, nsamples+1).reshape((-1,1))  ))
 
 data = pd.DataFrame(data)
 data.columns = colvars
 
+# Reorder the DataFrame
+all_columns = data.columns.tolist()
+all_columns.remove('Optimization Metric')
+all_columns.remove('Sequential Sample')
+new_column_order = ['Optimization Metric', 'Sequential Sample'] + all_columns
+data = data[new_column_order]
+colvars = data.columns
 
 # Sidebar for user input
 st.sidebar.title("Select X and Y Axis")
@@ -43,6 +62,9 @@ y_axis = st.sidebar.selectbox("Y-Axis", colvars)
 # Add slider for selecting top N rows
 n_rows = st.sidebar.slider("Select number of top rows to display", 1, 100, 10)
 
+st.sidebar.subheader("Y-Axis Limits")
+y_min = st.sidebar.number_input("Y-Axis Minimum", value=float(data[y_axis].min()))
+y_max = st.sidebar.number_input("Y-Axis Maximum", value=float(data[y_axis].max()))
 
 # Create a color array for the scatter plot
 colors = ['blue'] * len(data)
@@ -53,6 +75,9 @@ colors[min_index] = 'red'
 fig = px.scatter(data, x=x_axis, y=y_axis, color=colors, color_discrete_map={'blue': 'blue', 'red': 'red'})
 fig.update_traces(marker_size=12)
 fig.update_layout(width=800, height=600)
+
+# Set y-axis limits
+fig.update_yaxes(range=[y_min, y_max])
 
 # Remove the color legend
 fig.update_layout(showlegend=False)

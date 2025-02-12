@@ -45,12 +45,15 @@ cdk deploy -c json_file_path=../examples/fem_calculation/benchmark_config.json
 
 cdk synth -c json_file_path=../examples/gpu_training_optimization/benchmark_config.json
 cdk deploy -c json_file_path=../examples/gpu_training_optimization/benchmark_config.json
+
 '''
 
 json_file_path = app.node.try_get_context("json_file_path")
+print(json_file_path)
 if json_file_path:
     json_config = get_json(json_file_path)
 else:
+    print("Could not find provided path. Using default.")
     json_config = get_json('../benchmark_config.json')  # Default JSON file
 
 

@@ -6,7 +6,6 @@
 ######################################################################
 
 
-#from datetime import datetime, date, timedelta
 import requests
 import pandas as pd
 import boto3
@@ -17,7 +16,72 @@ from botocore.exceptions import ClientError
 from tqdm import tqdm
 import copy
 import time
+from tenacity import retry, stop_after_attempt, wait_exponential
+import os
+import tempfile
+import subprocess
+import uuid
 
+
+
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=60))
+def submit_single_job(
+    batch_client,
+    job_queue_name: str,
+    job_definition_name: str,
+    job_command: List[str],
+    ec2_type: Optional[str] = None,
+    rep: int = 0,
+    nnodes: int = 1,
+    cpu: int = 1,
+    ram: int = 1024,
+    gpus: int = 0
+) -> str:
+    legalname = ec2_type.replace('.', '-') if ec2_type else 'default'
+
+    # Include GPU number in the job name if GPUs are requested
+    gpu_suffix = f'-{gpus}gpu' if gpus > 0 else ''
+    job_name = f'ec2-benchmark-{legalname}{gpu_suffix}-{rep}'
+
+    node_property_overrides = {
+        'targetNodes': '0:',
+        'containerOverrides': {
+            'command': job_command,
+            'vcpus': cpu,
+            'memory': int(ram * 1e3),
+            'environment': [
+                {
+                    'name': 'EXPECTED_NODES',
+                    'value': str(nnodes)
+                },
+            ],
+        },
+    }
+
+    # Add GPU requirements if specified
+    if gpus > 0:
+        node_property_overrides['containerOverrides']['resourceRequirements'] = [
+            {
+                'type': 'GPU',
+                'value': str(gpus)
+            }
+        ]
+
+    # Only add instanceType if ec2_type is provided
+    if ec2_type:
+        node_property_overrides['containerOverrides']['instanceType'] = ec2_type
+
+    response = batch_client.submit_job(
+        #jobName=f'ec2-benchmark-{legalname}-{rep}',
+        jobName=job_name,
+        jobDefinition=job_definition_name,
+        jobQueue=job_queue_name,
+        nodeOverrides={
+            'numNodes': nnodes,
+            'nodePropertyOverrides': [node_property_overrides]
+        }
+    )
+    return response['jobId']
 
 
 def submit_jobs(
@@ -27,9 +91,12 @@ def submit_jobs(
     job_definition_name: str,
     replicates: int,
     job_command: List[str],
+    nnodes: int = 1,
+    alltypes: bool = True,
+    gpus: int = 0
 ) -> List[str]:
     """
-    Submit jobs to AWS Batch for the specified EC2 types.
+    Submit jobs to AWS Batch for the specified EC2 types with exponential backoff.
 
     Args:
         batch_client (botocore.client.Batch): AWS Batch client instance.
@@ -38,40 +105,73 @@ def submit_jobs(
         job_definition_name (str): Name of the AWS Batch job definition.
         replicates (int): Number of replicate jobs to submit for each EC2 type.
         job_command (List[str]): Command to run for each job.
+        nnodes (int): Number of nodes for each job. Defaults to 1.
+        alltypes (bool): If True, use all EC2 types; if False, use only the first type without specifying EC2 type. Defaults to True.
+        gpus (int): Number of GPUs to request for each job. Defaults to 0.
 
     Returns:
         List[str]: List of job IDs for the submitted jobs.
     """
     job_ids = []
-    for ec2_type in tqdm(ec2_types, desc="Submitting jobs"):
-        legalname = ec2_type.replace('.', '-')
+
+    if alltypes:
+        for ec2_type in tqdm(ec2_types, desc="Submitting jobs"):
+            specs = get_instance_specs(ec2_type)
+            cpu = int(specs['CPU'].split()[0])
+            ram = int(specs['RAM'].split()[0]) * 0.95  # Reserve some RAM for OS
+            available_gpus = int(specs['GPU'])
+
+            if gpus > available_gpus:
+               print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
+               return None
+
+            for rep in range(replicates):
+                try:
+                    job_id = submit_single_job(
+                        batch_client,
+                        job_queue_name,
+                        job_definition_name,
+                        job_command,
+                        ec2_type,
+                        rep,
+                        nnodes,
+                        cpu,
+                        ram,
+                        gpus
+                    )
+                    job_ids.append(job_id)
+                except Exception as e:
+                    print(f"Failed to submit job for {ec2_type}, replicate {rep}: {str(e)}")
+    else:
+        ec2_type = ec2_types[0]
         specs = get_instance_specs(ec2_type)
         cpu = int(specs['CPU'].split()[0])
         ram = int(specs['RAM'].split()[0]) * 0.95  # Reserve some RAM for OS
+        available_gpus = int(specs['GPU'])
 
-        for rep in range(replicates):
-            response = batch_client.submit_job(
-                jobName=f'ec2-benchmark-{legalname}-{rep}',
-                jobDefinition=job_definition_name,
-                jobQueue=job_queue_name,
-                nodeOverrides={
-                    'numNodes': 1,
-                    'nodePropertyOverrides': [{
-                        'targetNodes': '0:',
-                        'containerOverrides': {
-                            'command': job_command,
-                            'vcpus': cpu,
-                            'memory': int(ram * 1e3),
-                            'instanceType': ec2_type,
-                        },
-                    }]
-                }
-            )
-            job_id = response['jobId']
-            job_ids.append(job_id)
+        if gpus > available_gpus:
+           print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
+           return None
+
+        for rep in tqdm(range(replicates), desc="Submitting jobs"):
+            try:
+                job_id = submit_single_job(
+                    batch_client,
+                    job_queue_name,
+                    job_definition_name,
+                    job_command,
+                    None,  # ec2_type is None
+                    rep,
+                    nnodes,
+                    cpu,
+                    ram,
+                    gpus
+                )
+                job_ids.append(job_id)
+            except Exception as e:
+                print(f"Failed to submit job for replicate {rep}: {str(e)}")
 
     return job_ids
-
 
 
 def get_running_jobs(queue: str, region: str) -> List[Tuple[str, str]]:
@@ -101,9 +201,20 @@ def get_running_jobs(queue: str, region: str) -> List[Tuple[str, str]]:
 
     return jobs_list
 
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60)
+)
+def describe_jobs_with_retry(batch_client, jobs):
+    return batch_client.describe_jobs(jobs=jobs)['jobs']
+
+
 def aws_batch_wait(queue: str, region: str) -> None:
     """
     Waits for all jobs in a given queue and region to complete (either succeed or fail).
+    Uses exponential backoff when encountering errors.
 
     Args:
         queue (str): The name of the AWS Batch job queue.
@@ -122,7 +233,7 @@ def aws_batch_wait(queue: str, region: str) -> None:
         count += 1
 
         try:
-            job_statuses = batch_client.describe_jobs(jobs=running_jobs[:100])['jobs']
+            job_statuses = describe_jobs_with_retry(batch_client, running_jobs[:100])
             done_job_ids = [job['jobId'] for job in job_statuses if job['status'] in ['FAILED', 'SUCCEEDED']]
 
             for done_job_id in done_job_ids:
@@ -132,10 +243,102 @@ def aws_batch_wait(queue: str, region: str) -> None:
             fraction_done = (1 - len(running_jobs) / len(all_job_ids)) * 100
             if count % 5 == 0:
                 print(f"{fraction_done:.2f}% of jobs have completed.")
-        except ClientError as e:
+        except Exception as e:
             print(f"Error occurred while waiting for jobs: {e}")
 
         time.sleep(1)
+
+
+def createslurmdir():
+    directory = "slurmoutputs"
+    if not os.path.exists(directory):
+        try:
+            os.makedirs(directory)
+            print(f"Directory '{directory}' created successfully.")
+        except OSError as e:
+            print(f"Error creating directory '{directory}': {e}")
+
+
+def minutes_to_sbatch_time(minutes):
+    days, remainder = divmod(minutes, 24 * 60)
+    hours, remainder = divmod(remainder, 60)
+
+    if days > 0:
+        return f"{days}-{hours:02d}:{remainder:02d}:00"
+    else:
+        return f"{hours:02d}:{remainder:02d}:00"
+
+
+def submit_slurm_job(num_nodes, ecr_repo, image_name, image_version, script_arg, s3_bucket, region, job_timeout):
+
+    createslurmdir()
+
+    # Generate a unique identifier for this job
+    job_uuid = str(uuid.uuid4())[:8]  # Use first 8 characters of a UUID
+    job_name = f"optimization_job_{job_uuid}"
+
+    # Create a temporary file with a consistent naming scheme
+    temp_file_path = os.path.join(tempfile.gettempdir(), f"{job_name}.sh")
+
+    sbatch_time = minutes_to_sbatch_time(job_timeout)
+
+    # Create a temporary file
+    with open(temp_file_path, 'w') as temp_file:
+        script_content = f"""#!/bin/bash
+#SBATCH --job-name={job_name}
+#SBATCH --nodes={num_nodes}
+#SBATCH --ntasks-per-node=1
+#SBATCH --output=./slurmoutputs/{job_name}_%j.out
+#SBATCH --error=./slurmoutputs/{job_name}_%j.err
+#SBATCH --exclusive
+#SBATCH --time={sbatch_time}
+
+
+AWS_BATCH_JOB_MAIN_NODE_PRIVATE_IPV4_ADDRESS=$(hostname -I | awk '{{print $1}}')
+export AWS_BATCH_JOB_MAIN_NODE_PRIVATE_IPV4_ADDRESS
+
+srun --ntasks="${{SLURM_NTASKS}}" --ntasks-per-node=1 aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {ecr_repo}
+
+srun --ntasks="${{SLURM_NTASKS}}" --ntasks-per-node=1 docker pull {ecr_repo}/{image_name}:{image_version}
+
+srun --ntasks="${{SLURM_NTASKS}}" --ntasks-per-node=1 \\
+    docker run \\
+    --shm-size=20000000m \\
+    --network=host \\
+    -e EXPECTED_NODES="${{SLURM_NTASKS}}" \\
+    -e SLURM_LOCALID="${{SLURM_LOCALID}}" \\
+    -e AWS_BATCH_JOB_MAIN_NODE_PRIVATE_IPV4_ADDRESS="${{AWS_BATCH_JOB_MAIN_NODE_PRIVATE_IPV4_ADDRESS}}" \\
+    {ecr_repo}/{image_name}:{image_version} \\
+    {script_arg}
+"""
+        temp_file.write(script_content)
+        temp_file_path = temp_file.name
+
+    try:
+        # Submit the job to Slurm
+        submit_command = f"sbatch {temp_file_path}"
+        result = subprocess.run(submit_command, shell=True, check=True, capture_output=True, text=True)
+
+        # Extract job ID from the output
+        job_id = result.stdout.strip().split()[-1]
+        print(f"Job submitted with ID: {job_id}")
+
+        # Wait for the job to complete
+        while True:
+            status_command = f"squeue -j {job_id}"
+            status_result = subprocess.run(status_command, shell=True, capture_output=True, text=True)
+
+            if job_id not in status_result.stdout:
+                print("Job completed")
+                break
+
+            time.sleep(10)
+
+    finally:
+        # Clean up the temporary file
+        os.unlink(temp_file_path)
+
+
 
 def get_json(filename: str) -> Dict:
     """
@@ -459,33 +662,32 @@ def get_ec2_metadata(path='/latest/meta-data/'):
     return metadata_response.text
 
 
-
-def get_instance_specs(instance_type):
+def get_instance_specs(instance_type, region=None):
     """
-    Retrieves the RAM and CPU specifications for a given Amazon EC2 instance type.
+    Retrieves the RAM, CPU, and GPU specifications for a given Amazon EC2 instance type.
 
     Args:
-        instance_type (str): The Amazon EC2 instance type (e.g., 't2.micro', 'm5.large').
+        instance_type (str): The Amazon EC2 instance type (e.g., 't2.micro', 'm5.large', 'p3.2xlarge').
+        region (str, optional): The AWS region to use. If None, uses the default region.
 
     Returns:
-        dict: A dictionary containing the RAM and CPU specifications for the given instance type.
-              The RAM is displayed in GiB, and the CPU is displayed as the number of vCPUs.
-        str: If the instance type is not found, returns a string indicating that the instance type was not found.
-        str: If an exception occurs, returns a string indicating the error.
+        dict: A dictionary containing the RAM, CPU, and GPU specifications for the given instance type.
+              The RAM is displayed in GiB, the CPU is displayed as the number of vCPUs, and GPU is the number of GPUs.
+        None: If the instance type is not found or an error occurs.
 
     Example:
-        >>> specs = get_instance_specs('t2.micro')
+        >>> specs = get_instance_specs('p3.2xlarge')
         >>> print(specs)
-        {'RAM': '1 GiB', 'CPU': '1 vCPUs'}
+        {'RAM': '61 GiB', 'CPU': '8 vCPUs', 'GPU': '1'}
     """
     # Create an EC2 client
-    ec2_client = boto3.client('ec2')
+    ec2_client = boto3.client('ec2', region_name=region)
 
     try:
         # Describe the instance type
         response = ec2_client.describe_instance_types(InstanceTypes=[instance_type])
 
-        # If the instance type is found, extract the RAM and CPU details
+        # If the instance type is found, extract the RAM, CPU, and GPU details
         if response['InstanceTypes']:
             instance_details = response['InstanceTypes'][0]
             ram = instance_details['MemoryInfo']['SizeInMiB']
@@ -493,12 +695,26 @@ def get_instance_specs(instance_type):
             ram_display = f"{ram // 1024} GiB"  # Convert MiB to GiB
             cpu_display = f"{cpu} vCPUs"
 
-            return {'RAM': ram_display, 'CPU': cpu_display}
+            # Check for GPU information
+            gpu_count = 0
+            if 'GpuInfo' in instance_details:
+                gpu_count = instance_details['GpuInfo']['Gpus'][0]['Count']
+
+
+            specs = {
+                'RAM': ram_display,
+                'CPU': cpu_display,
+                'GPU': str(gpu_count)
+            }
+
+            return specs
         else:
-            return f"Instance type '{instance_type}' not found."
+            print(f"Instance type '{instance_type}' not found.")
+            return None
 
     except Exception as e:
-        return f"Error: {str(e)}"
+        print(f"Error retrieving specs for instance type '{instance_type}': {str(e)}")
+        return None
 
 
 def process_monitor_results(df: pd.DataFrame, instance_type: str, region: str) -> pd.DataFrame:

@@ -6,7 +6,7 @@ This advanced automation tool offers a two-pronged approach to optimize AWS EC2 
 1. Determine the most suitable EC2 instance type for a given workload.
 2. Optimize the workload itself to perform optimally on specific EC2 instance types.
 
-This tool is particularly valuable for compute-intensive tasks such as machine learning training, finite element analysis (FEM), computational fluid dynamics (CFD), risk analysis, simulations, and computer graphics rendering.
+This tool is particularly valuable for compute-intensive tasks such as machine learning training, finite element analysis (FEM), computational fluid dynamics (CFD), risk analysis, simulations, and computer graphics rendering. A blog can be found [here](https://aws.amazon.com/blogs/hpc/optimizing-compute-intensive-tasks-on-aws/).
 
 
 ### How It Works:

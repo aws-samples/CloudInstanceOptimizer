@@ -16,12 +16,20 @@ st.set_page_config(layout="wide")
 
 data = pd.read_csv('ec2data.csv')
 
+
+# Define the default columns
+default_columns = ['Avg_cpu', 'peak_RAM', 'cost', 'runtime', 'Disk_IO_Read',
+                   'Disk_IO_Write', 'Network_Sent', 'Network_Received']
+
+# Check if 'custom_metric' exists in the data
+if 'custom_metric' in data.columns:
+    default_columns.append('custom_metric')
+
 # Sidebar for user input
 st.sidebar.title("Select X and Y Axis")
-x_axis = st.sidebar.selectbox("X-Axis", ['Avg_cpu', 'peak_RAM', 'cost', 'runtime','Disk_IO_Read',
-                                         'Disk_IO_Write', 'Network_Sent', 'Network_Received'])
-y_axis = st.sidebar.selectbox("Y-Axis", ['Avg_cpu', 'peak_RAM', 'cost', 'runtime','Disk_IO_Read',
-                                         'Disk_IO_Write', 'Network_Sent', 'Network_Received'])
+x_axis = st.sidebar.selectbox("X-Axis", default_columns)
+y_axis = st.sidebar.selectbox("Y-Axis", default_columns)
+
 
 # Create the scatter plot with hover text
 fig1 = px.scatter(data, x=x_axis, y=y_axis, color='ec2_type', hover_data=['ec2_type', x_axis, y_axis])
