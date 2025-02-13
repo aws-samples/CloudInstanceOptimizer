@@ -171,10 +171,10 @@ To disable the valid list check, set `"valid_list": "False"` in your input:
 
 ```
 {
-	"region_name" : "us-east-1",
-	"ec2_types":[ "g6", "g5", "p4"],
-    "exclude_ec2_types": ["g5g"],
-    "valid_list": "False"
+     "region_name" : "us-east-1",
+     "ec2_types":[ "g6", "g5", "p4"],
+     "exclude_ec2_types": ["g5g"],
+     "valid_list": "False"
 }
 ```
 
