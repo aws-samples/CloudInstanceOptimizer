@@ -59,7 +59,10 @@ def get_ec2_types(json_config, valid_list):
     ec2_types = []
     for family_types in json_config["ec2_types"]:
         ec2_types.extend(get_instance_types_in_family(family_types))
-    ec2_types = [typ for typ in ec2_types if typ in valid_list or typ.split(".")[0] in valid_list]
+
+    use_valid_list = json_config.get("valid_list", True)
+    if use_valid_list is True or (isinstance(use_valid_list, str) and use_valid_list.lower() == 'true'):
+        ec2_types = [typ for typ in ec2_types if typ in valid_list or typ.split(".")[0] in valid_list]
     ec2_types = [typ for typ in ec2_types if "metal" not in typ]
     graviton_types, non_graviton_types = separate_ec2_types(ec2_types)
     return graviton_types, non_graviton_types
@@ -491,14 +494,6 @@ def run_optimization(json_config):
         num_generations = total_iterations
         num_parents_mating = int(np.ceil(0.2*optimization_parallel_samples))
         population_size = optimization_parallel_samples
-
-        # idx = 0
-        # variable_copy = json_config.get(f"optimization_arg{idx+1}_copy",1)
-        # if dim_types[idx] == 'integer':
-        #     gene_ranges = [range(dim_range[idx][0], dim_range[idx][1])] * variable_copy
-        # else:
-        #     gene_ranges = [{'low': dim_range[idx][0], 'high': dim_range[idx][1]}] * variable_copy
-
 
         gene_ranges = []
         for idx in range(len(dim_types)):

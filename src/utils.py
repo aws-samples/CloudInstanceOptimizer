@@ -122,7 +122,7 @@ def submit_jobs(
             available_gpus = int(specs['GPU'])
 
             if gpus > available_gpus:
-               print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
+               #print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
                return None
 
             for rep in range(replicates):
@@ -150,7 +150,7 @@ def submit_jobs(
         available_gpus = int(specs['GPU'])
 
         if gpus > available_gpus:
-           print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
+           #print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
            return None
 
         for rep in tqdm(range(replicates), desc="Submitting jobs"):
