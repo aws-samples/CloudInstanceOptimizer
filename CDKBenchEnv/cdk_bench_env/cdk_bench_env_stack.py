@@ -102,12 +102,13 @@ class CdkBenchEnvStack(Stack):
             valid_list = f.read()
         valid_list = valid_list.replace('\n','').replace(' ','').split(',')
 
-
         ec2types = []
         for family_types in json_config['ec2_types']:
             ec2types.extend(get_instance_types_in_family(family_types))
 
-        ec2types = [typ for typ in ec2types if typ in valid_list or typ.split('.')[0] in valid_list]
+        use_valid_list = json_config.get("valid_list", True)
+        if use_valid_list is True or (isinstance(use_valid_list, str) and use_valid_list.lower() == 'true'):
+            ec2types = [typ for typ in ec2types if typ in valid_list or typ.split('.')[0] in valid_list]
         ec2types = [typ for typ in ec2types if 'metal' not in typ]
 
         if len(ec2types) == 0:
@@ -120,7 +121,6 @@ class CdkBenchEnvStack(Stack):
                                     if not any(exclude in x for exclude in exclude_lst)]
         non_graviton_types_in_region = [x for x in non_graviton_types_in_region
                                         if not any(exclude in x for exclude in exclude_lst)]
-
 
         instance_classes = []
         graviton_instance_classes = []
@@ -241,6 +241,9 @@ class CdkBenchEnvStack(Stack):
 
         container = json_config['container_arn']
         gpu_count = json_config.get('gpu_count', 0)
+        #This gets overridden during main python run
+        if isinstance(gpu_count, list):
+            gpu_count=1
 
         container_properties_dict = {
             'image': container,
@@ -273,6 +276,9 @@ class CdkBenchEnvStack(Stack):
             container_propertiesARM = batch.CfnJobDefinition.ContainerPropertiesProperty(**container_properties_dict)
 
         nnodes = json_config.get("ec2_multinode_count",1)
+        #This gets overridden during main python run
+        if isinstance(nnodes, list):
+            nnodes=1
         job_definition = batch.CfnJobDefinition(self, "JDec2benchmark",
             type="multinode",
             container_properties=container_properties,

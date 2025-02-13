@@ -158,6 +158,26 @@ python run_benchmark.py -k -j ./examples/fem_calculation/benchmark_config.json
 
 where we have added the ```-k``` option.
 
+## EC2 Instance Type Validation
+
+As AWS evolves its EC2 offerings, the list of instance types compatible with AWS Batch may not always align perfectly with the total available EC2 types in your region. To address this, our system implements a validation check during both CDK deployment and CloudInstanceOptimizer execution.
+
+Sometimes, the CDK/SDK/Batch may not be perfectly synchronized, especially when new instances are introduced. To accommodate this:
+
+1. Users can disable the valid list check via JSON input
+2. During CDK deployment, AWS Batch will still refuse to deploy if the instance type is truly incompatible.  The AWS Batch error will state the EC2 type is not allowed.
+
+To disable the valid list check, set `"valid_list": "False"` in your input:
+
+```
+{
+	"region_name" : "us-east-1",
+	"ec2_types":[ "g6", "g5", "p4"],
+    "exclude_ec2_types": ["g5g"],
+    "valid_list": "False"
+}
+```
+
 ## Contributing
 
 Contributions to this project are welcome. Please follow the contributing guidelines and coding style guidelines when submitting pull requests or reporting issues.
