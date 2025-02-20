@@ -171,12 +171,40 @@ To disable the valid list check, set `"valid_list": "False"` in your input:
 
 ```
 {
-     "region_name" : "us-east-1",
-     "ec2_types":[ "g6", "g5", "p4"],
-     "exclude_ec2_types": ["g5g"],
-     "valid_list": "False"
+	"region_name" : "us-east-1",
+	"ec2_types":[ "g6", "g5", "p4"],
+        "exclude_ec2_types": ["g5g"],
+        "valid_list": "False"
 }
 ```
+
+### Cost Considerations
+
+#### **Important: Please be aware of potential AWS costs**
+
+Using the CloudInstanceOptimizer involves running your workloads on various EC2 instance types, which will incur AWS charges. The costs can vary significantly depending on:
+
+* The number and types of EC2 instances you choose to evaluate
+* The duration and resource intensity of your workload
+* The number of replications you specify
+* The extent of optimization iterations, especially when using global optimizers
+
+Additionally, there may be costs associated with:
+
+* Data transfer
+* S3 storage for logs and results
+* ECR usage for storing your container images
+
+To manage costs:
+
+1. Start with a small subset of instance types and replications for initial testing
+2. Use AWS Cost Explorer to monitor your spending
+3. Set up AWS Budgets to alert you if costs exceed expected thresholds
+4. Remember to terminate any running jobs and delete unnecessary resources after your optimization runs
+
+We recommend reviewing the [AWS Pricing](https://aws.amazon.com/pricing/) page and using the [AWS Pricing Calculator](https://calculator.aws/) to estimate potential costs before running extensive optimizations.
+
+By being mindful of these considerations, you can balance the benefits of optimization with cost-effective usage of AWS resources.
 
 ## Contributing
 

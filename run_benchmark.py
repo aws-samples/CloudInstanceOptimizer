@@ -34,6 +34,7 @@ import pickle
 import copy
 import numpy as np
 import pygad
+import time
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -60,8 +61,7 @@ def get_ec2_types(json_config, valid_list):
     for family_types in json_config["ec2_types"]:
         ec2_types.extend(get_instance_types_in_family(family_types))
 
-    use_valid_list = json_config.get("valid_list", True)
-    if use_valid_list is True or (isinstance(use_valid_list, str) and use_valid_list.lower() == 'true'):
+    if json_config.get("valid_list", True):
         ec2_types = [typ for typ in ec2_types if typ in valid_list or typ.split(".")[0] in valid_list]
     ec2_types = [typ for typ in ec2_types if "metal" not in typ]
     graviton_types, non_graviton_types = separate_ec2_types(ec2_types)
@@ -326,6 +326,8 @@ class pyOptObj:
 def filter_file_names(file_names, current_time, within_last_hrs):
     filtered_file_names = []
     for file_name in file_names:
+        if 'features' in file_name:
+            continue
         try:
             timestamp = datetime.strptime(file_name.split("_")[-1].split(".")[0], "%H%M%S")
             file_date = datetime.strptime(file_name.split("_")[-2], "%Y%m%d")
@@ -384,7 +386,10 @@ def process_results(filtered_file_names, region):
     for file_name in tqdm(filtered_file_names, desc="Processing results"):
         try:
             df = wr.s3.read_csv(path=file_name)
-            instance_type = file_name.split("/")[-1].split("_")[0]
+            splits = file_name.split("/")[-1].split("_")
+            instance_type = splits[0]
+            time = f"{splits[-2]}_{splits[-1].split('.')[0]}"
+
             df = process_monitor_results(df, instance_type, region)
             Avg_cpu = df["CPU_Usage"].mean()
             if Avg_cpu == 0.0:
@@ -392,6 +397,10 @@ def process_results(filtered_file_names, region):
             peak_ram = df["RAM_Usage"].max()
             cost = df["expected_cost"].max()
             runtime = df["runtime"].max()
+            cpu = df["total_cpus"].max()
+            ram = df["total_ram_gb"].max()
+            available_gpus = df["total_gpus"].max()
+            expected_nodes = df["expected_nodes"].max()
             if 'custom_metric' in df.columns:
                 custom_metric = df["custom_metric"].max()
             else:
@@ -411,7 +420,12 @@ def process_results(filtered_file_names, region):
                     Disk_IO_Write,
                     Network_Sent,
                     Network_Received,
-                    custom_metric
+                    cpu,
+                    ram,
+                    available_gpus,
+                    expected_nodes,
+                    time,
+                    custom_metric,
                 ]
             )
         except Exception as e:
@@ -429,6 +443,11 @@ def process_results(filtered_file_names, region):
             "Disk_IO_Write",
             "Network_Sent",
             "Network_Received",
+            "CPU Count",
+            "Total RAM",
+            "GPU Count",
+            "N Nodes",
+            "Time",
             "custom_metric"
         ],
     )
@@ -642,6 +661,21 @@ def get_queue_instance_type_map(batch_client, metadata, instance_types):
     return queue_instance_map
 
 
+def wait_for_all_batch_instances_to_terminate():
+    ec2_client = boto3.client('ec2')
+    while True:
+        # Get all running instances with AWS Batch tags
+        instances = ec2_client.describe_instances(Filters=[
+            {'Name': 'tag-key', 'Values': ['aws:batch:compute-environment']},
+            {'Name': 'instance-state-name', 'Values': ['running']}
+        ])
+
+        if not instances['Reservations']:
+            print("All AWS Batch instances have terminated.")
+            break
+        time.sleep(30)
+
+
 def run_benchmark(json_config):
     valid_list = load_valid_instance_list()
     region = json_config["region_name"]
@@ -689,40 +723,50 @@ def run_benchmark(json_config):
     gpu_counts = get_range_or_list(json_config.get("gpu_count", [0]))
     multinode_range = get_range(json_config.get("ec2_multinode_count", 1))
 
-    for queue_name in instance_queue_map.keys():
-        for gpu_count in gpu_counts:
-            for node_count in range(multinode_range[0], multinode_range[1] + 1):
-                job_ids = submit_jobs(
-                    batch_client,
-                    instance_queue_map[queue_name],
-                    queue_name,
-                    job_definition_name,
-                    replicates,
-                    job_command,
-                    nnodes=node_count,
-                    gpus=gpu_count
-                )
+    for batch in range(0,json_config.get("new_ec2_batches", 1)):
+        print("********************************************************")
+        print(f"EC2 Batch: {batch}")
+        print("********************************************************")
+        if batch > 0:
+            print("Waiting for all EC2 types to terminate.")
+            wait_for_all_batch_instances_to_terminate()
 
-    if job_definition_name_graviton is not None:
-        for queue_name_graviton in grav_instance_queue_map.keys():
+        for queue_name in instance_queue_map.keys():
             for gpu_count in gpu_counts:
                 for node_count in range(multinode_range[0], multinode_range[1] + 1):
-                    job_ids += submit_jobs(
+                    job_ids = submit_jobs(
                         batch_client,
-                        grav_instance_queue_map[queue_name_graviton],
-                        queue_name_graviton,
-                        job_definition_name_graviton,
+                        instance_queue_map[queue_name],
+                        queue_name,
+                        job_definition_name,
                         replicates,
                         job_command,
                         nnodes=node_count,
                         gpus=gpu_count
                     )
 
-    for queue_name in instance_queue_map.keys():
-        aws_batch_wait(queue_name, region)
-    if job_definition_name_graviton is not None:
-        for queue_name_graviton in grav_instance_queue_map.keys():
-            aws_batch_wait(queue_name_graviton, region)
+        if job_definition_name_graviton is not None:
+            for queue_name_graviton in grav_instance_queue_map.keys():
+                for gpu_count in gpu_counts:
+                    for node_count in range(multinode_range[0], multinode_range[1] + 1):
+                        job_ids += submit_jobs(
+                            batch_client,
+                            grav_instance_queue_map[queue_name_graviton],
+                            queue_name_graviton,
+                            job_definition_name_graviton,
+                            replicates,
+                            job_command,
+                            nnodes=node_count,
+                            gpus=gpu_count
+                        )
+
+
+        #TODO: want status of all queues instead of each individually
+        for queue_name in instance_queue_map.keys():
+            aws_batch_wait(queue_name, region)
+        if job_definition_name_graviton is not None:
+            for queue_name_graviton in grav_instance_queue_map.keys():
+                aws_batch_wait(queue_name_graviton, region)
 
     file_names = wr.s3.list_objects(f"s3://{s3_bucket_name}")
     current_time = datetime.now()

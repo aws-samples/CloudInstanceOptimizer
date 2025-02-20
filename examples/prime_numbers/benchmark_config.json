@@ -9,7 +9,8 @@
 	"job_timeout": 10,
 	"run_cmd": "python monitor_system.py --cmd python stress_test.py",
 	"ec2_types":[ "t2", "t3", "m4", "m5", "m6", "c4", "c5", "c6", "c7"],
-	"exclude_ec2_types":[ "m6id", "m5n", ".16xlarge", ".24xlarge", ".32xlarge" ,".48xlarge"  ]
+	"exclude_ec2_types":[ "m6id", "m5n", ".16xlarge", ".24xlarge", ".32xlarge" ,".48xlarge"  ],
+	"ebs_volume": 150
 }
 
 
