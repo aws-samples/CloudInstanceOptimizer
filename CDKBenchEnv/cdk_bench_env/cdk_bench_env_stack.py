@@ -15,7 +15,7 @@ def get_available_azs(region_name):
     ec2_client = boto3.client('ec2', region_name=region_name)
     response = ec2_client.describe_availability_zones(
         Filters=[
-            {'Name': 'opt-in-status', 'Values': ['opt-in-not-required', 'opted-in']},
+            {'Name': 'opt-in-status', 'Values': ['opt-in-not-required']},
             {'Name': 'state', 'Values': ['available']}
         ]
     )
@@ -52,6 +52,28 @@ class CdkBenchEnvStack(Stack):
         )
 
 
+        # https://docs.aws.amazon.com/batch/latest/userguide/efa.html
+        if json_config.get("useEFA", False):
+            # Needed for instances with EFA for multinode jobs
+            devices = [batch.CfnJobDefinition.DeviceProperty(
+                 container_path="/dev/infiniband/uverbs0",
+                 host_path= "/dev/infiniband/uverbs0",
+                 permissions=["READ", "WRITE", "MKNOD"]
+             ) ]
+
+            self.placement_group = ec2.CfnPlacementGroup(
+                                     self,
+                                     "BatchBenchmarkPlacementGroup",
+                                     strategy="cluster"
+                                 )
+
+
+        else:
+            devices = []
+            self.placement_group = None
+
+
+
         if "batch_backend" in json_config.keys():
             batch_backend = json_config["batch_backend"].lower()
         else:
@@ -76,7 +98,6 @@ class CdkBenchEnvStack(Stack):
 
         batch_iam = self.create_batch_instance_role(json_config['s3_bucket_name'], backend=batch_backend)
 
-        #TODO: volume_size should be user option
         template = ec2.CfnLaunchTemplate(self, "CreatedTemplate",
             launch_template_data=ec2.CfnLaunchTemplate.LaunchTemplateDataProperty(
                 block_device_mappings=[ec2.CfnLaunchTemplate.BlockDeviceMappingProperty(
@@ -86,7 +107,7 @@ class CdkBenchEnvStack(Stack):
                         encrypted=True,
                         iops=3000,
                         throughput=123,
-                        volume_size=1000,
+                        volume_size=json_config.get('ebs_volume',1000),
                         volume_type="gp3"
                     ),
                 )],
@@ -106,8 +127,7 @@ class CdkBenchEnvStack(Stack):
         for family_types in json_config['ec2_types']:
             ec2types.extend(get_instance_types_in_family(family_types))
 
-        use_valid_list = json_config.get("valid_list", True)
-        if use_valid_list is True or (isinstance(use_valid_list, str) and use_valid_list.lower() == 'true'):
+        if json_config.get("valid_list", True):
             ec2types = [typ for typ in ec2types if typ in valid_list or typ.split('.')[0] in valid_list]
         ec2types = [typ for typ in ec2types if 'metal' not in typ]
 
@@ -156,28 +176,41 @@ class CdkBenchEnvStack(Stack):
         else:
             ami_image = None
 
-        #TODO: consider making this use input
-        #MAX_TYPES_PER_ENV = 8
-        MAX_TYPES_PER_ENV = 3
+        MAX_TYPES_PER_ENV = json_config.get("ec2_type_per_ce", 3)
 
+        # TODO: ok well looks like spot is NOT supported with MNP for Batch right now.
+        # Batch team might enable in the future.
         def create_compute_env_and_queue(self, instance_classes, env_name, queue_name, batch_iam, template, ami_image=None):
-            compute_env = batch.ManagedEc2EcsComputeEnvironment(
-                self,
-                env_name,
-                vpc=self.vpc,
-                instance_role=batch_iam,
-                minv_cpus=self.json_config.get("batch_min_cpu",0),
-                maxv_cpus=self.json_config.get("batch_max_cpu",100000),
-                use_optimal_instance_classes=False,
-                instance_classes=instance_classes,
-                launch_template=ec2.LaunchTemplate.from_launch_template_attributes(
+            use_spot = self.json_config.get("use_spot_instances", False)
+            spot_bid_percentage = self.json_config.get("spot_bid_percentage", 100)
+
+            compute_env_props = {
+                "vpc": self.vpc,
+                "instance_role": batch_iam,
+                "minv_cpus": self.json_config.get("batch_min_cpu", 0),
+                "maxv_cpus": self.json_config.get("batch_max_cpu", 100000),
+                "use_optimal_instance_classes": False,
+                "instance_classes": instance_classes,
+                "launch_template": ec2.LaunchTemplate.from_launch_template_attributes(
                     self,
                     f"LaunchTemplate-{env_name}",
                     launch_template_id=template.attr_launch_template_id,
                     version_number="$Latest"
                 ),
-                images=ami_image,
-                security_groups=[self.multinode_sg]
+                "images": ami_image,
+                "security_groups": [self.multinode_sg],
+                "placement_group": self.placement_group
+            }
+
+            if use_spot:
+                compute_env_props["allocation_strategy"] = batch.AllocationStrategy.SPOT_CAPACITY_OPTIMIZED
+                compute_env_props["spot_bid_percentage"] = spot_bid_percentage
+                compute_env_props["spot"] = True
+
+            compute_env = batch.ManagedEc2EcsComputeEnvironment(
+                self,
+                env_name,
+                **compute_env_props
             )
 
             job_queue = batch.JobQueue(
@@ -229,21 +262,29 @@ class CdkBenchEnvStack(Stack):
                 graviton_compute_envs.append(env)
                 graviton_job_queues.append(queue)
 
+
+
         #TODO: 12 should be user input or a query
         if ami_image is not None:
-            devices = [batch.CfnJobDefinition.DeviceProperty(
+            devices.extend( [batch.CfnJobDefinition.DeviceProperty(
                 container_path=f"/dev/neuron{i}",
                 host_path=f"/dev/neuron{i}",
                 permissions=["READ", "WRITE", "MKNOD"]
-            ) for i in range(12)]
-        else:
-            devices = None
+            ) for i in range(12)] )
+
 
         container = json_config['container_arn']
         gpu_count = json_config.get('gpu_count', 0)
-        #This gets overridden during main python run
         if isinstance(gpu_count, list):
+            #This gets overridden during main python run
             gpu_count=1
+            env_vars = {
+                        "NCCL_SOCKET_IFNAME": "eth0,en,eth,em,bond",
+                        "NCCL_DEBUG": "INFO"
+                       }
+        else:
+            env_vars = {}
+
 
         container_properties_dict = {
             'image': container,
@@ -257,7 +298,8 @@ class CdkBenchEnvStack(Stack):
             'log_configuration': batch.CfnJobDefinition.LogConfigurationProperty(
                 log_driver="awslogs"),
             'vcpus': 1,
-            'memory': 1024
+            'memory': 1024,
+            'environment': [{"name": key, "value": value} for key, value in env_vars.items()]
         }
 
         if gpu_count > 0:
@@ -351,5 +393,8 @@ class CdkBenchEnvStack(Stack):
             actions=["cloudformation:ListStackResources"],
             resources=["*"],
         ))
+
+        if self.json_config.get("use_spot_instances", False):
+            batch_instance_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AmazonEC2SpotFleetTaggingRole"))
 
         return batch_instance_role

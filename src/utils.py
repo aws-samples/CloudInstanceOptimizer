@@ -72,7 +72,6 @@ def submit_single_job(
         node_property_overrides['containerOverrides']['instanceType'] = ec2_type
 
     response = batch_client.submit_job(
-        #jobName=f'ec2-benchmark-{legalname}-{rep}',
         jobName=job_name,
         jobDefinition=job_definition_name,
         jobQueue=job_queue_name,
@@ -121,9 +120,9 @@ def submit_jobs(
             ram = int(specs['RAM'].split()[0]) * 0.95  # Reserve some RAM for OS
             available_gpus = int(specs['GPU'])
 
-            if gpus > available_gpus:
+            if gpus > available_gpus*nnodes:
                #print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
-               return None
+               continue
 
             for rep in range(replicates):
                 try:
@@ -149,7 +148,7 @@ def submit_jobs(
         ram = int(specs['RAM'].split()[0]) * 0.95  # Reserve some RAM for OS
         available_gpus = int(specs['GPU'])
 
-        if gpus > available_gpus:
+        if gpus > available_gpus*nnodes:
            #print(f"Cannot submit jobs: Requested {gpus} GPUs, but only {available_gpus} available on {ec2_type}")
            return None
 
@@ -242,7 +241,7 @@ def aws_batch_wait(queue: str, region: str) -> None:
 
             fraction_done = (1 - len(running_jobs) / len(all_job_ids)) * 100
             if count % 5 == 0:
-                print(f"{fraction_done:.2f}% of jobs have completed.")
+                print(f"{fraction_done:.2f}% of jobs have completed. Queue: {queue}")
         except Exception as e:
             print(f"Error occurred while waiting for jobs: {e}")
 
@@ -493,7 +492,10 @@ def get_ec2_on_demand_price(instance_type: str, region: str) -> List[float]:
     Returns:
         List[float]: A list of on-demand prices (in USD) for the given instance type and region.
     """
-    client = boto3.client('pricing', region_name=region)
+
+
+    #Looks like only us-east-1 has the data, but it includes data for all regions
+    client = boto3.client('pricing', region_name='us-east-1')
 
     region_name = get_region_name(region)
 

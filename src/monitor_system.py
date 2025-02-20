@@ -15,7 +15,7 @@ from utils import get_instance_region, get_ec2_instance_id, get_ec2_type
 import awswrangler as wr
 import pandas
 import sys
-
+import uuid
 
 class ResourceMonitor(Thread):
     """
@@ -98,6 +98,27 @@ class ResourceMonitor(Thread):
         self.stop_event = True
 
 
+def get_gpu_count():
+    try:
+        # Use os.system to run nvidia-smi and capture its output
+        temp_file = '/tmp/gpu_count.txt'
+        exit_code = os.system(f'nvidia-smi -L > {temp_file} 2>/dev/null')
+
+        if exit_code == 0:
+            with open(temp_file, 'r') as f:
+                gpu_list = f.readlines()
+            os.remove(temp_file)
+            return len(gpu_list)
+        else:
+            return 0
+    except Exception:
+        return 0
+
+def get_cpu_count():
+    return psutil.cpu_count(logical=False)
+
+def get_total_ram():
+    return psutil.virtual_memory().total / (1024 ** 3)  # Total RAM in GB
 
 #%% main
 if __name__ == '__main__':
@@ -125,7 +146,8 @@ if __name__ == '__main__':
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if args.id is None:
-        local_file = f"{ec2type}_{instance_id}_{timestamp}.csv"
+        unique_hash = uuid.uuid4().hex[:8]
+        local_file = f"{ec2type}_{instance_id}_{unique_hash}_{timestamp}.csv"
     else:
         local_file = f"{ec2type}_{args.id}_{timestamp}.csv"
 
@@ -160,6 +182,24 @@ if __name__ == '__main__':
     print('Resource monitoring stopped.')
 
     if not failed:
+
+        # Get system information
+        gpu_count = get_gpu_count()
+        cpu_count = get_cpu_count()
+        total_ram = get_total_ram()
+
+        expected_nodes = os.environ.get('EXPECTED_NODES', '1')
+
+        # Read the CSV file
+        csv_logs = pandas.read_csv(local_file)
+
+        # Add constants columns
+        csv_logs['total_gpus'] = [gpu_count] * csv_logs.shape[0]
+        csv_logs['total_cpus'] = [cpu_count] * csv_logs.shape[0]
+        csv_logs['total_ram_gb'] = [total_ram] * csv_logs.shape[0]
+        csv_logs['expected_nodes'] = [int(expected_nodes)] * csv_logs.shape[0]
+        csv_logs.to_csv(local_file)
+
         if args.cf is not None:
             print("Custom metric option selected.")
             if os.path.isfile(args.cf):
