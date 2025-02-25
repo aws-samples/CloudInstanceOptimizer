@@ -401,6 +401,8 @@ def process_results(filtered_file_names, region):
             ram = df["total_ram_gb"].max()
             available_gpus = df["total_gpus"].max()
             expected_nodes = df["expected_nodes"].max()
+            cost *= expected_nodes
+
             if 'custom_metric' in df.columns:
                 custom_metric = df["custom_metric"].max()
             else:
