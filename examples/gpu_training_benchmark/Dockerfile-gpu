@@ -1,0 +1,46 @@
+FROM nvcr.io/nvidia/pytorch:23.05-py3
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y \
+    build-essential \
+    python3-dev \
+    python3-pip \
+    curl \
+    unzip \
+    pciutils \
+    netcat \
+    iproute2 \
+    iputils-ping \
+    traceroute \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+#-----------------------------
+
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install
+
+
+COPY requirements.txt /
+RUN python -m pip install --no-cache-dir -r /requirements.txt
+
+WORKDIR /
+
+RUN python -m pip install --no-cache-dir torchvision
+
+# Code a user wants to run on each EC2 instance and find the best option
+COPY ./examples/gpu_training_optimization/download_data.py /
+
+# Run the download script to pre-download the data
+RUN python /download_data.py
+
+COPY ./src/utils.py /
+COPY ./src/monitor_system.py /
+
+COPY ./examples/gpu_training_benchmark/train.py /
+COPY ./examples/gpu_training_benchmark/runscript.sh /
+
+WORKDIR /
