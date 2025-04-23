@@ -147,6 +147,8 @@ A streamlit app to review the optimization results can be activated via:
 2. **FEM Calculation:** [Folder](/examples/fem_calculation) Similiar to the prime number calculation, but a much more intensive workload.  This includes more complicated containers and runscripts.
 3. **FEM Parallelization Optimization:** [Folder](/examples/fem_calculation_optimization) Example of how to find the best parallel configuration for the FEM workload. The runtime is the main objective function for the optimization.
 4. **GPU Training Optimization:** [Folder](/examples/gpu_training_optimization) Example of how to find the best learning rate, batch size, and epochs for a GPU ML training workload. The test set loss is the main objective function for the optimization.
+5. **MultiGPU MultiNode Benchmarking:** [Folder](/examples/gpu_training_benchmark) Example of benchmarking a GPU workload. In this case, we are training a ViT (Vision Transformer) Neural Network and want to see how the training speed changes with multiple GPUs and multiple nodes. This example shows how to run all permutations.
+
 
 ### Terminate Tasks
 

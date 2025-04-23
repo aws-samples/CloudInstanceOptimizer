@@ -1,7 +1,8 @@
 from aws_cdk import (
     Duration,
     Stack,
-    CfnOutput
+    CfnOutput,
+    Fn
 )
 from constructs import Construct
 from aws_cdk import aws_ec2 as ec2
@@ -30,54 +31,30 @@ class CdkBenchEnvStack(Stack):
         self.json_config = json_config
 
         # Forced to create a new VPC, mnp in batch seems to not work correctly in default vpc
-        #self.vpc = ec2.Vpc(self, "VPC", max_azs=6)
-        # Get all available AZs using boto3
-        available_azs = get_available_azs(json_config["region_name"])
-        self.vpc = ec2.Vpc(
-            self,
-            "benchmarkVPC",
-            subnet_configuration=[
-                ec2.SubnetConfiguration(
-                    subnet_type=ec2.SubnetType.PUBLIC,
-                    name="Public",
-                    cidr_mask=22
-                ),
-                ec2.SubnetConfiguration(
-                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
-                    name="Private",
-                    cidr_mask=22
-                )
-            ],
-            availability_zones=available_azs  # Explicitly specify the AZs to get all available
-        )
-
-
-        # https://docs.aws.amazon.com/batch/latest/userguide/efa.html
-        if json_config.get("useEFA", False):
-            # Needed for instances with EFA for multinode jobs
-            devices = [batch.CfnJobDefinition.DeviceProperty(
-                 container_path="/dev/infiniband/uverbs0",
-                 host_path= "/dev/infiniband/uverbs0",
-                 permissions=["READ", "WRITE", "MKNOD"]
-             ) ]
-
-            self.placement_group = ec2.CfnPlacementGroup(
-                                     self,
-                                     "BatchBenchmarkPlacementGroup",
-                                     strategy="cluster"
-                                 )
-
-
+        if json_config.get("useAllSubnets",False):
+            # Get all available AZs using boto3
+            available_azs = get_available_azs(json_config["region_name"])
+            self.vpc = ec2.Vpc(
+                self,
+                "benchmarkVPC",
+                subnet_configuration=[
+                    ec2.SubnetConfiguration(
+                        subnet_type=ec2.SubnetType.PUBLIC,
+                        name="Public",
+                        cidr_mask=22
+                    ),
+                    ec2.SubnetConfiguration(
+                        subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                        name="Private",
+                        cidr_mask=22
+                    )
+                ],
+                availability_zones=available_azs,  # Explicitly specify the AZs to get all available
+                #TODO: required when using EFA
+                restrict_default_security_group = False
+            )
         else:
-            devices = []
-            self.placement_group = None
-
-
-
-        if "batch_backend" in json_config.keys():
-            batch_backend = json_config["batch_backend"].lower()
-        else:
-            batch_backend = 'ecs'
+            self.vpc = ec2.Vpc(self, "VPC", max_azs=6)
 
 
         # Create a security group for multinode communication
@@ -96,6 +73,58 @@ class CdkBenchEnvStack(Stack):
             description="Allow all traffic between nodes"
         )
 
+        #TODO: I think we need more testing on EFA use
+        # https://docs.aws.amazon.com/batch/latest/userguide/efa.html
+        if json_config.get("useEFA", False):
+            # Needed for instances with EFA for multinode jobs
+            devices = [batch.CfnJobDefinition.DeviceProperty(
+                 container_path="/dev/infiniband/uverbs0",
+                 host_path= "/dev/infiniband/uverbs0",
+                 permissions=["READ", "WRITE", "MKNOD"]
+             ) ]
+
+            self.placement_group = ec2.CfnPlacementGroup(
+                                      self,
+                                      "BatchBenchmarkPlacementGroup",
+                                      strategy="cluster"
+                                  )
+
+
+            # Launch Template with User Data Script to install EFA drivers
+            user_data = '''#!/bin/bash
+# Download and install EFA
+curl -s -o /tmp/aws-efa-installer-latest.tar.gz https://s3-us-west-2.amazonaws.com/aws-efa-installer/aws-efa-installer-latest.tar.gz
+tar -xf /tmp/aws-efa-installer-latest.tar.gz -C /tmp
+cd /tmp/aws-efa-installer
+sudo ./efa_installer.sh -y'''
+            user_data = Fn.base64(user_data)
+
+            lt_network=[ec2.CfnLaunchTemplate.NetworkInterfaceProperty(
+                                #associate_public_ip_address=True,
+                                delete_on_termination=True,
+                                description="EFA Interface for Batch Jobs",
+                                device_index=0,
+                                groups=[self.multinode_sg.security_group_id],
+                                interface_type="efa"
+                            )]
+
+        else:
+            devices = []
+            self.placement_group = None
+            user_data = None
+            lt_network = []
+
+        # user_data = None
+        # lt_network = []
+        # self.placement_group = None
+
+
+        if "batch_backend" in json_config.keys():
+            batch_backend = json_config["batch_backend"].lower()
+        else:
+            batch_backend = 'ecs'
+
+
         batch_iam = self.create_batch_instance_role(json_config['s3_bucket_name'], backend=batch_backend)
 
         template = ec2.CfnLaunchTemplate(self, "CreatedTemplate",
@@ -107,10 +136,15 @@ class CdkBenchEnvStack(Stack):
                         encrypted=True,
                         iops=3000,
                         throughput=123,
-                        volume_size=json_config.get('ebs_volume',1000),
+                        volume_size=json_config.get('ebs_volume', 1000),
                         volume_type="gp3"
-                    ),
+                    )
                 )],
+                user_data=user_data,
+                network_interfaces=lt_network,
+                # placement=ec2.CfnLaunchTemplate.PlacementProperty(
+                #     group_name=placement_group.ref
+                # )
             ),
             launch_template_name="CDKBenchmarkTemplate"
         )
@@ -165,7 +199,7 @@ class CdkBenchEnvStack(Stack):
             description="EC2 instance types selected for the compute environment"
         )
 
-
+        #TODO: ok this has now been enabled, so we we need to enable it here
         if batch_backend == 'eks':
             raise ValueError("ERROR: EKS with Batch does not support multinode yet")
 
@@ -198,7 +232,7 @@ class CdkBenchEnvStack(Stack):
                     version_number="$Latest"
                 ),
                 "images": ami_image,
-                "security_groups": [self.multinode_sg],
+                "security_groups": [] if self.json_config.get("useEFA", False) else [self.multinode_sg],
                 "placement_group": self.placement_group
             }
 
@@ -275,13 +309,18 @@ class CdkBenchEnvStack(Stack):
 
         container = json_config['container_arn']
         gpu_count = json_config.get('gpu_count', 0)
-        if isinstance(gpu_count, list):
+        if isinstance(gpu_count, list) or gpu_count > 0:
             #This gets overridden during main python run
             gpu_count=1
             env_vars = {
                         "NCCL_SOCKET_IFNAME": "eth0,en,eth,em,bond",
-                        "NCCL_DEBUG": "INFO"
+                        "NCCL_DEBUG": "INFO",
+                        #"NCCL_P2P_DISABLE": "0",
+                        #"NCCL_SHM_DISABLE": "0",
+                        #"NCCL_DEBUG_SUBSYS": "ALL",
+                        #"NCCL_P2P_LEVEL": "NVL"
                        }
+                        #"NCCL_SOCKET_IFNAME": "eth0",
         else:
             env_vars = {}
 
@@ -333,7 +372,10 @@ class CdkBenchEnvStack(Stack):
                 node_range_properties=[batch.CfnJobDefinition.NodeRangePropertyProperty(
                     container=container_properties,
                     target_nodes="0:"
-                )]
+                )],
+                # network_configuration=batch.CfnJobDefinition.NetworkConfigurationProperty(
+                #     enable_efa=self.json_config.get("useEFA", False)
+                # )
             )
         )
 

@@ -1,0 +1,19 @@
+{
+	"region_name" : "us-east-1",
+	"s3_bucket_name" :  "dummy-bucket" ,
+	"container_arn" : "dummy.dkr.ecr.dummy-region.amazonaws.com/dummy-container",
+	"logGroupName" : "/aws/batch/job",
+	"replications" : 1,
+	"review_logs_past_hrs": 5,
+	"job_timeout": 20,
+	"run_cmd": "python /monitor_system.py -cf /custom_test_metric.txt --cmd /runscript.sh",
+	"ec2_types":["g5"],
+    "exclude_ec2_types": ["g5g", ".24xlarge", ".12xlarge", ".16xlarge", ".8xlarge", ".4xlarge", ".2xlarge", ".xlarge"],
+	"gpu_count" : [1,4,8],
+	"ec2_multinode_count" : [1,3],
+	"useEFA": false,
+	"valid_list": false,
+	"useAllSubnets": true
+}
+
+
